@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanlight Tether — Big Light + Capture One</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <div class="header-title">SCANLIGHT TETHER</div>
+    <div class="header-subtitle">Big Scanlight Controller + Capture One Integration</div>
+  </div>
+  <div class="status-badge">
+    <span class="status-dot" id="light-dot"></span>
+    <span id="light-status">Light: Disconnected</span>
+    <span class="status-divider"></span>
+    <span class="status-dot" id="session-dot"></span>
+    <span id="session-status">Session: Not Open</span>
+  </div>
+</header>
+
+<main class="main-grid">
+
+  <!-- LEFT: Light Controls -->
+  <section class="panel">
+
+    <div class="section">
+      <div class="section-title">Light Connection</div>
+      <div class="row">
+        <button class="btn primary" id="btn-connect">Connect USB Device</button>
+        <button class="btn danger" id="btn-disconnect" disabled>Disconnect</button>
+      </div>
+      <div class="alert warning mt8" id="alert-power" hidden>
+        Power supply insufficient for full brightness. Use USB-C at 9V / 2A.
+      </div>
+      <div class="alert error mt8" id="alert-error" hidden></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Channel Control (0–255)</div>
+
+      <div class="channel-row">
+        <span class="channel-label r">R</span>
+        <input type="range" class="range-r" id="slider-r" min="0" max="255" value="128">
+        <input type="number" id="num-r" min="0" max="255" value="128">
+      </div>
+      <div class="channel-row">
+        <span class="channel-label g">G</span>
+        <input type="range" class="range-g" id="slider-g" min="0" max="255" value="128">
+        <input type="number" id="num-g" min="0" max="255" value="128">
+      </div>
+      <div class="channel-row">
+        <span class="channel-label b">B</span>
+        <input type="range" class="range-b" id="slider-b" min="0" max="255" value="128">
+        <input type="number" id="num-b" min="0" max="255" value="128">
+      </div>
+      <div class="channel-row">
+        <span class="channel-label w">W</span>
+        <input type="range" class="range-w" id="slider-w" min="0" max="255" value="0">
+        <input type="number" id="num-w" min="0" max="255" value="0">
+      </div>
+      <div class="channel-row">
+        <span class="channel-label ir">IR</span>
+        <input type="range" class="range-ir" id="slider-ir" min="0" max="255" value="0">
+        <input type="number" id="num-ir" min="0" max="255" value="0">
+      </div>
+
+      <div class="channel-toggles mt8">
+        <span class="toggle-label">Enable:</span>
+        <button class="toggle-btn r active" id="tog-r">R</button>
+        <button class="toggle-btn g active" id="tog-g">G</button>
+        <button class="toggle-btn b active" id="tog-b">B</button>
+        <button class="toggle-btn w" id="tog-w">W</button>
+        <button class="toggle-btn ir" id="tog-ir">IR</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Quick Actions</div>
+      <div class="btn-group">
+        <button class="btn" id="q-rgb">RGB</button>
+        <button class="btn" id="q-white">WHITE</button>
+        <button class="btn danger" id="q-off">OFF</button>
+      </div>
+      <div class="btn-group mt8">
+        <button class="btn outline-r" id="q-r">R only</button>
+        <button class="btn outline-g" id="q-g">G only</button>
+        <button class="btn outline-b" id="q-b">B only</button>
+        <button class="btn outline-ir" id="q-ir">IR only</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Presets</div>
+      <div class="preset-list" id="preset-list"></div>
+      <div class="row mt4">
+        <button class="btn" id="btn-save-preset" disabled>+ Save Current</button>
+        <button class="btn" id="btn-set-default" disabled title="Store current colors as device power-on default">Set as Default</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Channel Trim (L/R Balance, −127 to +127)</div>
+      <div class="trim-row">
+        <span class="channel-label r">R</span>
+        <input type="range" id="trim-r" min="-127" max="127" value="0">
+        <input type="number" id="trim-r-num" min="-127" max="127" value="0">
+      </div>
+      <div class="trim-row">
+        <span class="channel-label g">G</span>
+        <input type="range" id="trim-g" min="-127" max="127" value="0">
+        <input type="number" id="trim-g-num" min="-127" max="127" value="0">
+      </div>
+      <div class="trim-row">
+        <span class="channel-label b">B</span>
+        <input type="range" id="trim-b" min="-127" max="127" value="0">
+        <input type="number" id="trim-b-num" min="-127" max="127" value="0">
+      </div>
+      <div class="trim-row">
+        <span class="channel-label w">W</span>
+        <input type="range" id="trim-w" min="-127" max="127" value="0">
+        <input type="number" id="trim-w-num" min="-127" max="127" value="0">
+      </div>
+      <button class="btn mt8" id="btn-send-trim" disabled>Apply Trim</button>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Device Info</div>
+      <div class="info-grid">
+        <div class="info-card">
+          <div class="info-card-label">Voltage</div>
+          <div class="info-card-value" id="voltage-display">—</div>
+        </div>
+        <div class="info-card">
+          <div class="info-card-label">Firmware</div>
+          <div class="info-card-value small" id="fw-display">—</div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- RIGHT: Camera + Capture One -->
+  <section class="panel right">
+
+    <div class="section">
+      <div class="section-title">Camera Automation — Canon EOS R</div>
+
+      <div class="timing-grid">
+        <div>
+          <div class="timing-row">
+            <label>Shutter Pulse</label>
+            <input type="number" id="timing-pulse" value="30" min="1" max="255">
+            <span class="unit">ms</span>
+          </div>
+          <div class="timing-row">
+            <label>Post-Shutter Delay</label>
+            <input type="number" id="timing-delay" value="1000" min="100" max="10000">
+            <span class="unit">ms</span>
+          </div>
+          <div class="timing-row">
+            <label>Pre-Capture Settle</label>
+            <input type="number" id="timing-settle" value="100" min="0" max="2000">
+            <span class="unit">ms</span>
+          </div>
+        </div>
+        <div>
+          <label class="small-label">Sequence Mode</label>
+          <div class="btn-group mt4">
+            <button class="btn primary seq-btn" data-seq="rgb">RGB</button>
+            <button class="btn seq-btn" data-seq="rgbir">RGBIR</button>
+            <button class="btn seq-btn" data-seq="nwir">NWIR</button>
+            <button class="btn seq-btn" data-seq="bwir">BWIR</button>
+          </div>
+          <div class="btn-group mt8">
+            <button class="btn success" id="btn-run-seq" disabled>▶ Run Sequence</button>
+            <button class="btn danger" id="btn-stop-seq" disabled>■ Stop</button>
+            <button class="btn" id="btn-test-shutter" disabled>Test Shutter</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sequence-progress" id="seq-progress" hidden>
+        <div class="seq-status" id="seq-status-text">Idle</div>
+        <div class="sequence-steps" id="seq-step-dots"></div>
+      </div>
+
+      <div class="alert info mt8 small">
+        Tether the Canon EOS R to Capture One before running sequences. The scanlight cycles channels and triggers the camera shutter via its 3.5mm sync port (use a TRS-to-Canon RS-60E3 cable, or wire to the EOS R remote port). Capture One will auto-import each frame into the session's Captures folder.
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Capture One Session</div>
+      <div class="row">
+        <button class="btn primary" id="btn-open-session">Open Session Folder</button>
+        <button class="btn danger" id="btn-close-session" disabled>Close</button>
+        <button class="btn" id="btn-refresh-session" disabled>↻ Refresh</button>
+        <label class="inline-check">
+          <input type="checkbox" id="chk-autopoll" checked> Auto-poll
+        </label>
+      </div>
+      <div id="session-info" hidden>
+        <div class="folder-path" id="session-path-display"></div>
+        <div class="session-stats mt8">
+          <div class="stat-item">
+            <div class="stat-value" id="stat-total">0</div>
+            <div class="stat-label">Total</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value new" id="stat-new">0</div>
+            <div class="stat-label">New</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-raw">0</div>
+            <div class="stat-label">RAW</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="stat-jpg">0</div>
+            <div class="stat-label">JPEG</div>
+          </div>
+        </div>
+        <div class="latest-info" id="latest-capture"></div>
+      </div>
+      <div class="alert info mt8 small" id="session-help">
+        Tip: in Capture One, right-click your session → "Show Session Folder in Finder". Select the session's <code>Captures/</code> subfolder (or the session root — this app auto-detects the Captures folder).
+      </div>
+    </div>
+
+    <div class="section thumbnails-section">
+      <div class="row-between">
+        <div class="section-title no-border">Recent Captures</div>
+        <span class="small-label">JPEG preview • RAW files transferred but not previewable</span>
+      </div>
+      <div class="thumbnail-grid" id="thumbnail-grid">
+        <div class="empty-message">No session open — connect to a Capture One session to view incoming photos.</div>
+      </div>
+    </div>
+
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
