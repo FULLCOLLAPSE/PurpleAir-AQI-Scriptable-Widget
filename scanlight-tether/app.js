@@ -84,10 +84,13 @@ async function disconnectSerial() {
   seqAbort = true;
   connected = false;
   setLightConnected(false);
-  try { if (reader) await reader.cancel(); } catch {}
-  try { if (writer) writer.releaseLock(); } catch {}
-  try { if (port)   await port.close();   } catch {}
-  writer = reader = port = null;
+  // Null out port first so readLoop's outer while loop doesn't grab a new reader
+  const r = reader, w = writer, p = port;
+  port = reader = writer = null;
+  try { if (r) await r.cancel(); } catch {}
+  await sleep(50); // let readLoop's finally block release the lock
+  try { if (w) w.releaseLock(); } catch {}
+  try { if (p) await p.close(); } catch {}
 }
 
 async function readLoop() {
@@ -451,6 +454,23 @@ function syncToggleBtns() {
 
 let powerWarnDismissed = false;
 
+const SHUTTER_SPEEDS_MS  = [4000, 2000, 1000, 500, 250, 125, 60, 30, 15, 8, 4, 2];
+const SHUTTER_SPEED_LBLS = ['4"', '2"', '1"', '1/2', '1/4', '1/8', '1/15', '1/30', '1/60', '1/125', '1/250', '1/500'];
+
+function updateShutterRec() {
+  const delayMs = parseInt($('timing-delay').value) || 1000;
+  const budget  = delayMs * 0.75; // use 75% of delay as safe exposure budget
+  const idx = SHUTTER_SPEEDS_MS.findIndex(ms => ms <= budget);
+  const el  = $('shutter-rec');
+  if (idx >= 0) {
+    el.textContent = `Recommended camera shutter: ${SHUTTER_SPEED_LBLS[idx]}s or faster`;
+    el.className = 'shutter-rec ok';
+  } else {
+    el.textContent = 'Post-shutter delay is very short — increase it or use Bulb mode';
+    el.className = 'shutter-rec warn';
+  }
+}
+
 function updateVoltage(mv) {
   const label = $('voltage-display');
   const v = (mv / 1000).toFixed(2) + 'V';
@@ -566,6 +586,7 @@ document.querySelectorAll('.seq-btn').forEach(btn => {
 $('btn-run-seq').addEventListener('click', runSequence);
 $('btn-stop-seq').addEventListener('click', () => { seqAbort = true; });
 $('btn-test-shutter').addEventListener('click', sendShutter);
+$('timing-delay').addEventListener('input', updateShutterRec);
 
 // Session
 $('btn-open-session').addEventListener('click', openSession);
@@ -582,3 +603,4 @@ if (!('serial' in navigator)) {
 
 renderPresets();
 setLightConnected(false);
+updateShutterRec();
