@@ -449,12 +449,26 @@ function syncToggleBtns() {
   });
 }
 
+let powerWarnDismissed = false;
+
 function updateVoltage(mv) {
   const label = $('voltage-display');
-  label.textContent = (mv / 1000).toFixed(1) + 'V';
+  const v = (mv / 1000).toFixed(2) + 'V';
+  label.textContent = v;
   label.className = 'info-card-value ' +
     (mv >= USB_VBUS_9V ? 'ok' : mv >= USB_VBUS_5V ? 'warn' : 'err');
-  $('alert-power').hidden = mv >= USB_VBUS_9V;
+  const alertEl = $('alert-power');
+  if (mv < USB_VBUS_9V && !powerWarnDismissed) {
+    alertEl.innerHTML = `Detected ${v} — full brightness requires 9V / 2A via USB-C PD. ` +
+      `If your supply is 9V, try a shorter or higher-quality cable. ` +
+      `<button onclick="powerWarnDismissed=true;this.closest('.alert').hidden=true" ` +
+      `style="margin-left:8px;background:transparent;border:1px solid currentColor;` +
+      `color:inherit;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:11px">Dismiss</button>`;
+    alertEl.hidden = false;
+  } else if (mv >= USB_VBUS_9V) {
+    alertEl.hidden = true;
+    powerWarnDismissed = false;
+  }
 }
 
 function setLightConnected(yes) {
