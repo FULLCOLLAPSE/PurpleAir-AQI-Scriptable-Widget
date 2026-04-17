@@ -1,3 +1,6 @@
+// Variables used by Scriptable.
+// These must be at the very top of the file. Do not edit.
+// icon-color: deep-green; icon-glyph: leaf;
 "use strict";
 
 /**
@@ -6,7 +9,15 @@
  * Based on code by Matt Silverlock.
  */
 
-const API_URL = "https://www.purpleair.com";
+const API_URL = "https://api.purpleair.com/";
+
+/**
+ * This widget requires a PurpleAir API key. If you don't have one,
+ * you'll need to request one from <https://www2.purpleair.com/pages/contact-us>
+ * and enter your READ KEY in the API key variable below.
+ */
+
+const API_KEY = "your-api-key-goes-here";
 
 /**
  * Find a nearby PurpleAir sensor ID via https://fire.airnow.gov/
@@ -14,6 +25,7 @@ const API_URL = "https://www.purpleair.com";
  * https://www.purpleair.com/json has all sensors by location & ID.
  * @type {number}
  */
+
 const SENSOR_ID = args.widgetParameter;
 
 /**
@@ -28,13 +40,13 @@ const SENSOR_ID = args.widgetParameter;
  * @property {string} darkStartColor
  * @property {string} darkEndColor
  * @property {string} darkTextColor
+ * @property {string} sfSymbol
  */
 
 /**
  * @typedef {object} SensorData
  * @property {string} val
- * @property {string} adj1
- * @property {string} adj2
+ * @property {string} adj
  * @property {number} ts
  * @property {string} hum
  * @property {string} loc
@@ -47,6 +59,7 @@ const SENSOR_ID = args.widgetParameter;
  * @property {number} latitude
  * @property {number} longitude
  */
+
 
 /**
  * Get JSON from a local file
@@ -86,6 +99,8 @@ function cacheData(fileName, data) {
   fileManager.writeString(cacheFile, contents);
 }
 
+
+
 /**
  * Get the closest PurpleAir sensorId to the given location
  *
@@ -99,7 +114,7 @@ async function getSensorId() {
   try {
     const cachedSensor = getCachedData("sensor.json");
     if (cachedSensor) {
-      console.log({ cachedSensor });
+      console.log({ "Cached Sensor": cachedSensor });
 
       const { id, updatedAt } = cachedSensor;
       fallbackSensorId = id;
@@ -112,35 +127,27 @@ async function getSensorId() {
     /** @type {LatLon} */
     const { latitude, longitude } = await Location.current();
 
-    const BOUND_OFFSET = 0.05;
+    const BOUND_OFFSET = 0.2;
 
     const nwLat = latitude + BOUND_OFFSET;
     const seLat = latitude - BOUND_OFFSET;
     const nwLng = longitude - BOUND_OFFSET;
     const seLng = longitude + BOUND_OFFSET;
-
-    const req = new Request(
-      `${API_URL}/data.json?opt=1/mAQI/a10/cC5&fetch=true&nwlat=${nwLat}&selat=${seLat}&nwlng=${nwLng}&selng=${seLng}&fields=ID`
+    var req = new Request(
+      `${API_URL}/v1/sensors?fields=name,latitude,longitude&max_age=3600&location_type=0&nwlat=${nwLat}&selat=${seLat}&nwlng=${nwLng}&selng=${seLng}`
     );
+    req.headers = {"X-API-Key": API_KEY} ;
 
-    /** @type {{ code?: number; data?: Array<Array<number>>; fields?: Array<string>; }} */
     const res = await req.loadJSON();
-
-    const { fields, data } = res;
-
-    const sensorIdIndex = fields.indexOf("ID");
-    const latIndex = fields.indexOf("Lat");
-    const lonIndex = fields.indexOf("Lon");
-    const typeIndex = fields.indexOf("Type");
-    const OUTDOOR = 0;
+    const { data } = res;
 
     let closestSensor;
     let closestDistance = Infinity;
 
-    for (const location of data.filter((datum) => datum[typeIndex] === OUTDOOR)) {
+    for (const location of data) {
       const distanceFromLocation = haversine(
         { latitude, longitude },
-        { latitude: location[latIndex], longitude: location[lonIndex] }
+        { latitude: location[2], longitude: location[3] }
       );
       if (distanceFromLocation < closestDistance) {
         closestDistance = distanceFromLocation;
@@ -148,8 +155,10 @@ async function getSensorId() {
       }
     }
 
-    const id = closestSensor[sensorIdIndex];
-    cacheData("sensor.json", { id, updatedAt: Date.now() });
+    const [id, name, lat, long] = closestSensor;
+    const typedSensor = { id, name, latitude: lat, longitude: long, updatedAt: Date.now() };
+    console.log({ "Closest sensor": typedSensor });
+    cacheData("sensor.json", typedSensor);
 
     return id;
   } catch (error) {
@@ -186,20 +195,42 @@ function haversine(start, end) {
  * @param {number} sensorId
  * @returns {Promise<SensorData>}
  */
-async function getSensorData(sensorId) {
-  const req = new Request(`${API_URL}/json?show=${sensorId}`);
-  const json = await req.loadJSON();
 
-  return {
-    val: json.results[0].Stats,
-    adj1: json.results[0].pm2_5_cf_1,
-    adj2: json.results[1].pm2_5_cf_1,
-    ts: json.results[0].LastSeen,
-    hum: json.results[0].humidity,
-    loc: json.results[0].Label,
-    lat: json.results[0].Lat,
-    lon: json.results[0].Lon,
-  };
+async function getSensorData(sensorId) {
+  const sensorCache = `sensor-${sensorId}-data.json`;
+  var req = new Request(`${API_URL}/v1/sensors/${sensorId}`);
+  req.headers = {"X-API-Key": API_KEY} ;
+
+  let json = await req.loadJSON();
+
+  try {
+    // Check that our results are what we expect
+    if (json && json.sensor) {
+      console.log(`Sensor data looks good, will cache.`);
+      const sensorData = { json, updatedAt: Date.now() }
+      cacheData(sensorCache, sensorData);
+    } else {
+      const { json: cachedJson, updatedAt } = getCachedData(sensorCache);
+      if (Date.now() - updatedAt > 2 * 60 * 60 * 1000) {
+        // Bail if our data is > 2 hours old
+        throw `Our cache is too old: ${updatedAt}`;
+      }
+      console.log(`Using cached sensor data: ${updatedAt}`);
+      json = cachedJson;
+    }
+    return {
+      val: json.sensor,
+      adj: json.sensor["pm2.5_cf_1"], // as of Sep 2023 Purple Air API has pm2.5_cf_1 at top level of JSON
+      ts: json.sensor.last_seen,
+      hum: json.sensor.humidity,
+      loc: json.sensor.name,
+      lat: json.sensor.latitude,
+      lon: json.sensor.longitude,
+    };
+  } catch (error) {
+    console.log(`Could not parse JSON: ${error}`);
+    throw 666;
+  }
 }
 
 /**
@@ -210,16 +241,43 @@ async function getSensorData(sensorId) {
  * @returns {Promise<GeospatialData>}
  */
 async function getGeoData(lat, lon) {
-  const providerUrl = 'https://geocode.xyz/'
-  const req = new Request(`${providerUrl}${lat},${lon}?geoit=json`);
-  const json = await req.loadJSON();
+  const latitude = Number.parseFloat(lat);
+  const longitude = Number.parseFloat(lon);
+
+  const geo = await Location.reverseGeocode(latitude, longitude);
+  console.log({ geo: geo });
 
   return {
-    city: json.city,
-    state: json.state,
-    stateName: json.statename,
-    zip: json.postal,
+    neighborhood: geo[0].subLocality,
+    city: geo[0].locality,
+    state: geo[0].administrativeArea,
   };
+}
+
+/**
+ * Fetch a renderable location
+ *
+ * @param {SensorData} data
+ * @returns {Promise<String>}
+ */
+async function getLocation(data) {
+  try {
+    if (args.widgetParameter) {
+      return data.loc;
+    }
+
+    const geoData = await getGeoData(data.lat, data.lon);
+    console.log({ geoData });
+
+    if (geoData.neighborhood && geoData.city) {
+        return `${geoData.neighborhood}, ${geoData.city}`;
+    } else {
+        return geoData.city || data.loc;
+    }
+  } catch (error) {
+    console.log(`Could not cleanup location: ${error}`);
+    return data.loc;
+  }
 }
 
 
@@ -234,6 +292,7 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "ce4ec5",
+    sfSymbol: "aqi.high",
   },
   {
     threshold: 200,
@@ -244,6 +303,7 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "f33939",
+    sfSymbol: "aqi.high",
   },
   {
     threshold: 150,
@@ -254,6 +314,7 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "f16745",
+    sfSymbol: "aqi.high",
   },
   {
     threshold: 100,
@@ -264,6 +325,7 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "f7a021",
+    sfSymbol: "aqi.medium",
   },
   {
     threshold: 50,
@@ -274,6 +336,7 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "f2e269",
+    sfSymbol: "aqi.low",
   },
   {
     threshold: -20,
@@ -284,23 +347,39 @@ const LEVEL_ATTRIBUTES = [
     darkStartColor: "333333",
     darkEndColor: "000000",
     darkTextColor: "6de46d",
+    sfSymbol: "aqi.low",
   },
 ];
+
+
 
 
 /**
  * Get the EPA adjusted PPM
  *
  * @param {SensorData} sensorData
- * @returns {number} EPA draft adjustment for wood smoke and PurpleAir from https://cfpub.epa.gov/si/si_public_record_report.cfm?dirEntryId=349513&Lab=CEMM&simplesearch=0&showcriteria=2&sortby=pubDate&timstype=&datebeginpublishedpresented=08/25/2018
+ * @returns {number} EPA adjustment for wood smoke and PurpleAir
  */
 function computePM(sensorData) {
-  const adj1 = Number.parseInt(sensorData.adj1, 10);
-  const adj2 = Number.parseInt(sensorData.adj2, 10);
+  const dataAverage = Number.parseInt(sensorData.adj, 10);
   const hum = Number.parseInt(sensorData.hum, 10);
-  const dataAverage = (adj1 + adj2) / 2;
+  console.log(`PM2.5 number is ${dataAverage}.`)
 
-  return 0.52 * dataAverage - 0.085 * hum + 5.71;
+  // now a piecewise formula, revised by EPA in October 2021 as described here https://cfpub.epa.gov/si/si_public_record_report.cfm?dirEntryId=353088&Lab=CEMM
+  // direct download to PDF https://cfpub.epa.gov/si/si_public_file_download.cfm?p_download_id=544231&Lab=CEMM -- slide 26 has formula
+
+  if (dataAverage < 30) {
+    return 0.524*dataAverage - 0.0862*hum + 5.75;
+    } else if (30 <= dataAverage && dataAverage < 50) {
+      return (0.786 * (dataAverage/20 - 3/2) + 0.524*(1 - (dataAverage/20 - 3/2)))*dataAverage - 0.0862*hum + 5.75;
+    } else if (50 <= dataAverage && dataAverage < 210) {
+      return 0.786*dataAverage - 0.0862*hum + 5.75;  
+    } else if (210 <= dataAverage && dataAverage < 260) {
+      return (0.69*(dataAverage/50 - 21/5) + 0.786*(1 - (dataAverage/50 - 21/5)))*dataAverage - 0.0862*hum*(1 - (dataAverage/50 - 21/5)) + 2.966*(dataAverage/50 - 21/5) + 5.75*(1 - (dataAverage/50 - 21/5)) + 8.84*(10**-4)*dataAverage**2*(dataAverage/50 - 21/5);
+    } else if (260 <= dataAverage) {    
+      return 2.966 + 0.69*dataAverage + 8.84*10**-4*dataAverage**2; 
+    }
+  
 }
 
 /**
@@ -356,6 +435,7 @@ function calculateLevel(aqi) {
     darkEndColor = "007700",
     darkTextColor = "000000",
     threshold = -Infinity,
+    sfSymbol = "aqi.low",
   } = LEVEL_ATTRIBUTES.find(({ threshold }) => level > threshold) || {};
 
   return {
@@ -368,65 +448,60 @@ function calculateLevel(aqi) {
     darkTextColor,
     threshold,
     level,
+    sfSymbol,
   };
-}
-
-/**
- * Text to title case
- * @returns {string}
- */
-
-function toTitleCase(str) {
-  return str.replace(
-    /\w\S*/g,
-    function(txt) {
-      return txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase();
-    }
-  );
 }
 
 /**
  * Get the AQI trend
  *
- * @param {{ v1: number; v3: number; }} stats
+ * @param {{ pm2.5: number; pm2.5_10minute: number; }} stats
  * @returns {string}
  */
-function getAQITrend({ v1: partLive, v3: partTime }) {
+function getAQITrend(stats) {
+  const partLive = stats["pm2.5"];
+  const partTime = stats["pm2.5_10minute"]
   const partDelta = partTime - partLive;
   if (partDelta > 5) return "arrow.down";
   if (partDelta < -5) return "arrow.up";
-  return "arrow.left.and.right";
+  return "";
 }
 
 /**
  * Constructs an SFSymbol from the given symbolName
  *
  * @param {string} symbolName
+ * @param {number} fontSize
  * @returns {object} SFSymbol
  */
-function createSymbol(symbolName) {
+function createSymbol(symbolName, fontSize) {
   const symbol = SFSymbol.named(symbolName);
-  symbol.applyFont(Font.systemFont(14));
+  symbol.applyFont(Font.systemFont(fontSize));
   return symbol;
 }
 
 async function run() {
   const listWidget = new ListWidget();
-  listWidget.setPadding(10, 15, 10, 10);
+  listWidget.useDefaultPadding();
 
   try {
+    if (!API_KEY || API_KEY === "your-api-key-goes-here") {
+      throw `You need a PurpleAir API Key for this widget.`;
+    }
+
     const sensorId = await getSensorId();
+
     if (!sensorId) {
       throw "Please specify a location for this widget.";
     }
     console.log(`Using sensor ID: ${sensorId}`);
 
     const data = await getSensorData(sensorId);
-    const stats = JSON.parse(data.val);
+
+    const stats = data.val.stats;
     console.log({ stats });
 
     const aqiTrend = getAQITrend(stats);
-    console.log({ aqiTrend });
 
     const epaPM = computePM(data);
     console.log({ epaPM });
@@ -436,58 +511,83 @@ async function run() {
     const aqiText = aqi.toString();
     console.log({ aqi });
 
-    const isDarkMode = Device.isUsingDarkAppearance();
+    const sensorLocation = await getLocation(data)
+    console.log({ sensorLocation });
 
-    const startColor = new Color(
-      isDarkMode ? level.darkStartColor : level.startColor
-    );
-    const endColor = new Color(
-      isDarkMode ? level.darkEndColor : level.endColor
-    );
-    const textColor = new Color(
-      isDarkMode ? level.darkTextColor : level.textColor
-    );
+    const startColor = Color.dynamic(new Color(level.startColor), new Color(level.darkStartColor));
+    const endColor = Color.dynamic(new Color(level.endColor), new Color(level.darkEndColor));
+    const textColor = Color.dynamic(new Color(level.textColor), new Color(level.darkTextColor));
+
+    // BACKGROUND
+
     const gradient = new LinearGradient();
-
-    console.log(`${isDarkMode ? "dark" : "light"} mode`);
-
     gradient.colors = [startColor, endColor];
     gradient.locations = [0.0, 1];
     console.log({ gradient });
 
     listWidget.backgroundGradient = gradient;
 
-    const header = listWidget.addText('Air Quality'.toUpperCase());
+    // HEADER
+
+    const headStack = listWidget.addStack();
+    headStack.layoutHorizontally();
+    headStack.topAlignContent();
+    headStack.setPadding (0,0,0,0);
+
+    const textStack = headStack.addStack();
+    textStack.layoutVertically();
+    textStack.topAlignContent();
+    textStack.setPadding (0,0,0,0);
+
+    const header = textStack.addText('Air Quality'.toUpperCase());
     header.textColor = textColor;
     header.font = Font.regularSystemFont(11);
-    header.minimumScaleFactor = 0.50;
-    
-    const wordLevel = listWidget.addText(level.label);
+    header.minimumScaleFactor = 1;
+
+    const wordLevel = textStack.addText(level.label);
     wordLevel.textColor = textColor;
     wordLevel.font = Font.semiboldSystemFont(25);
     wordLevel.minimumScaleFactor = 0.3;
-    
-    listWidget.addSpacer(5);
+
+    headStack.addSpacer();
+
+    const statusSymbol = createSymbol(level.sfSymbol, 20);
+    const statusImg = headStack.addImage(statusSymbol.image);
+    statusImg.resizable = false;
+    statusImg.tintColor = textColor;
+
+    listWidget.addSpacer(0);
+
+    // SCORE
 
     const scoreStack = listWidget.addStack();
+    scoreStack.centerAlignContent()
+
     const content = scoreStack.addText(aqiText);
     content.textColor = textColor;
     content.font = Font.semiboldSystemFont(30);
-    const trendSymbol = createSymbol(aqiTrend);
-    const trendImg = scoreStack.addImage(trendSymbol.image);
-    trendImg.resizable = false;
-    trendImg.tintColor = textColor;
-    trendImg.imageSize = new Size(30, 28);
 
-    listWidget.addSpacer(10);
-    
-    const geoData = await getGeoData(data.lat, data.lon)
-    const locationText = listWidget.addText(toTitleCase(geoData.city) );
+    if (aqiTrend.length > 0) {
+      scoreStack.addSpacer(4);
+
+      const trendSymbol = createSymbol(aqiTrend, 15);
+      const trendImg = scoreStack.addImage(trendSymbol.image);
+      trendImg.resizable = false;
+      trendImg.tintColor = textColor;
+    }
+
+    listWidget.addSpacer();
+
+    // LOCATION
+
+    const locationText = listWidget.addText(sensorLocation);
     locationText.textColor = textColor;
     locationText.font = Font.regularSystemFont(14);
-	 locationText.minimumScaleFactor = 0.5;
+    locationText.minimumScaleFactor = 0.5;
 
-	listWidget.addSpacer(2);
+    listWidget.addSpacer(2);
+
+    // UPDATED AT
 
     const updatedAt = new Date(data.ts * 1000).toLocaleTimeString([], {
       hour: "numeric",
@@ -495,18 +595,36 @@ async function run() {
     });
     const widgetText = listWidget.addText(`Updated ${updatedAt}`);
     widgetText.textColor = textColor;
-    widgetText.font = Font.regularSystemFont(9);
-    widgetText.minimumScaleFactor = 0.6;
+    widgetText.font = Font.regularSystemFont(8);
+    widgetText.minimumScaleFactor = 0.5;
 
-    const purpleMapUrl = `https://www.purpleair.com/map?opt=1/i/mAQI/a10/cC5&select=${sensorId}#14/${data.lat}/${data.lon}`;
+    // TAP HANDLER
+    var purpleMapUrl = `https://www.purpleair.com/map?opt=1/i/mAQI/a10/cC5?key=${API_KEY}&select=${sensorId}#14/${data.lat}/${data.lon}`;
     listWidget.url = purpleMapUrl;
   } catch (error) {
-    console.log(`Could not render widget: ${error}`);
+    if (error === 666) {
+      // Handle JSON parsing errors with a custom error layout
 
-    const errorWidgetText = listWidget.addText(`${error}`);
-    errorWidgetText.textColor = Color.red();
-    errorWidgetText.textOpacity = 30;
-    errorWidgetText.font = Font.regularSystemFont(10);
+      listWidget.background = new Color('999999');
+      const header = listWidget.addText('Error'.toUpperCase());
+      header.textColor = new Color('000000');
+      header.font = Font.regularSystemFont(11);
+      header.minimumScaleFactor = 0.50;
+
+      listWidget.addSpacer(15);
+
+      const wordLevel = listWidget.addText(`Couldn't connect to the server.`);
+      wordLevel.textColor = new Color ('000000');
+      wordLevel.font = Font.semiboldSystemFont(15);
+      wordLevel.minimumScaleFactor = 0.3;
+    } else {
+      console.log(`Could not render widget: ${error}`);
+
+      const errorWidgetText = listWidget.addText(`${error}`);
+      errorWidgetText.textColor = Color.red();
+      errorWidgetText.textOpacity = 30;
+      errorWidgetText.font = Font.regularSystemFont(10);
+    }
   }
 
   if (config.runsInApp) {
