@@ -42,9 +42,10 @@ let channels = [128, 128, 128, 0, 0]; // R G B W IR
 let enabled  = [1, 1, 1, 0, 0];
 let trims    = [0, 0, 0, 0];          // R G B W (signed)
 
-let activeSeq  = 'rgb';
-let seqRunning = false;
-let seqAbort   = false;
+let activeSeq   = 'rgb';
+let captureMode = 'segregated'; // 'segregated' | 'combined'
+let seqRunning  = false;
+let seqAbort    = false;
 
 let sessionDirHandle = null;
 let sessionFiles     = new Map(); // name → lastModified
@@ -187,17 +188,11 @@ async function sendShutter() {
 }
 
 // ── Sequences ─────────────────────────────────────────────────────────────────
-async function runSequence() {
-  if (!connected || seqRunning) return;
-  const steps     = SEQUENCES[activeSeq];
-  const settleMs  = parseInt($('timing-settle').value)  || 100;
-  const delayMs   = parseInt($('timing-delay').value)   || 1000;
-
+function seqStart(steps) {
   seqRunning = true;
   seqAbort   = false;
   $('btn-run-seq').disabled  = true;
   $('btn-stop-seq').disabled = false;
-
   const prog = $('seq-progress');
   const dots = $('seq-step-dots');
   prog.hidden = false;
@@ -208,14 +203,38 @@ async function runSequence() {
     d.id = `dot-${i}`;
     dots.appendChild(d);
   });
+}
+
+function seqEnd(steps, aborted) {
+  seqRunning = false;
+  $('btn-run-seq').disabled  = false;
+  $('btn-stop-seq').disabled = true;
+  $('seq-status-text').textContent = aborted ? 'Stopped' : 'Complete ✓';
+  steps.forEach((_, i) => {
+    const d = $(`dot-${i}`);
+    if (d) d.className = aborted ? 'step-dot' : 'step-dot done';
+  });
+}
+
+function setDot(i, steps, activeCls) {
+  for (let j = 0; j < i; j++) $(`dot-${j}`).className = 'step-dot done';
+  $(`dot-${i}`).className = `step-dot ${activeCls}`;
+}
+
+async function runSequence() {
+  if (!connected || seqRunning) return;
+  if (captureMode === 'combined') { await runCombinedSequence(); return; }
+
+  const steps    = SEQUENCES[activeSeq];
+  const settleMs = parseInt($('timing-settle').value) || 100;
+  const delayMs  = parseInt($('timing-delay').value)  || 1000;
+
+  seqStart(steps);
 
   for (let i = 0; i < steps.length && !seqAbort; i++) {
     const mask   = steps[i];
     const chIdx  = mask.findIndex(v => v > 0);
-    const dotCls = SEQ_STEP_CLASSES[chIdx] ?? 'active-r';
-
-    for (let j = 0; j < i; j++) $(`dot-${j}`).className = 'step-dot done';
-    $(`dot-${i}`).className = `step-dot ${dotCls}`;
+    setDot(i, steps, SEQ_STEP_CLASSES[chIdx] ?? 'active-r');
     $('seq-status-text').textContent = `Step ${i + 1} / ${steps.length} — ${SEQ_STEP_NAMES[chIdx] ?? '?'}`;
 
     await sendPacket(PKT_H2D_SET_COLOR, [
@@ -234,16 +253,49 @@ async function runSequence() {
   }
 
   await sendColor();
-  seqRunning = false;
-  $('btn-run-seq').disabled  = false;
-  $('btn-stop-seq').disabled = true;
+  seqEnd(steps, seqAbort);
+}
 
-  const done = !seqAbort;
-  $('seq-status-text').textContent = done ? 'Complete ✓' : 'Stopped';
-  for (let i = 0; i < steps.length; i++) {
-    const d = $(`dot-${i}`);
-    if (d) d.className = done ? 'step-dot done' : 'step-dot';
+async function runCombinedSequence() {
+  const steps     = SEQUENCES[activeSeq];
+  const settleMs  = parseInt($('timing-settle').value) || 100;
+  const flashMs   = parseInt($('timing-flash').value)  || 200;
+  // Total exposure needed: settle + (channels × flash) + small buffer
+  const totalMs   = settleMs + steps.length * flashMs + 100;
+  // Firmware pulse value: clamp to 255. If total > 255ms, user must use Bulb.
+  const pulseVal  = Math.min(255, totalMs);
+
+  seqStart(steps);
+  $('seq-status-text').textContent = 'Opening shutter…';
+
+  // Fire shutter open (don't await — the pulse runs in firmware while we cycle lights)
+  sendPacket(PKT_H2D_SHUTTER, [pulseVal]);
+
+  await sleep(settleMs);
+
+  for (let i = 0; i < steps.length && !seqAbort; i++) {
+    const mask  = steps[i];
+    const chIdx = mask.findIndex(v => v > 0);
+    setDot(i, steps, SEQ_STEP_CLASSES[chIdx] ?? 'active-r');
+    $('seq-status-text').textContent = `Flashing ${SEQ_STEP_NAMES[chIdx] ?? '?'} (${i + 1}/${steps.length})`;
+
+    await sendPacket(PKT_H2D_SET_COLOR, [
+      Math.round(channels[0] * mask[0]),
+      Math.round(channels[1] * mask[1]),
+      Math.round(channels[2] * mask[2]),
+      Math.round(255 * mask[3]),
+      Math.round(255 * mask[4]),
+      0,
+    ]);
+    await sleep(flashMs);
   }
+
+  // Lights off — shutter closes when pulse expires
+  await sendPacket(PKT_H2D_SET_COLOR, [0, 0, 0, 0, 0, 0]);
+  $('seq-status-text').textContent = seqAbort ? 'Stopped' : 'Exposure complete ✓';
+
+  await sendColor(); // restore user's settings
+  seqEnd(steps, seqAbort);
 }
 
 // ── Presets ───────────────────────────────────────────────────────────────────
@@ -458,17 +510,36 @@ const SHUTTER_SPEEDS_MS  = [4000, 2000, 1000, 500, 250, 125, 60, 30, 15, 8, 4, 2
 const SHUTTER_SPEED_LBLS = ['4"', '2"', '1"', '1/2', '1/4', '1/8', '1/15', '1/30', '1/60', '1/125', '1/250', '1/500'];
 
 function updateShutterRec() {
-  const delayMs = parseInt($('timing-delay').value) || 1000;
-  const budget  = delayMs * 0.75; // use 75% of delay as safe exposure budget
-  const idx = SHUTTER_SPEEDS_MS.findIndex(ms => ms <= budget);
-  const el  = $('shutter-rec');
-  if (idx >= 0) {
-    el.textContent = `Recommended camera shutter: ${SHUTTER_SPEED_LBLS[idx]}s or faster`;
+  const el = $('shutter-rec');
+  if (captureMode === 'combined') {
+    const settleMs = parseInt($('timing-settle').value) || 100;
+    const flashMs  = parseInt($('timing-flash').value)  || 200;
+    const steps    = SEQUENCES[activeSeq].length;
+    const totalMs  = settleMs + steps * flashMs + 100;
+    el.textContent = `Set camera to Bulb mode. Total exposure ≈ ${totalMs}ms (${(totalMs/1000).toFixed(2)}s)`;
     el.className = 'shutter-rec ok';
   } else {
-    el.textContent = 'Post-shutter delay is very short — increase it or use Bulb mode';
-    el.className = 'shutter-rec warn';
+    const delayMs = parseInt($('timing-delay').value) || 1000;
+    const budget  = delayMs * 0.75;
+    const idx = SHUTTER_SPEEDS_MS.findIndex(ms => ms <= budget);
+    if (idx >= 0) {
+      el.textContent = `Recommended camera shutter: ${SHUTTER_SPEED_LBLS[idx]}s or faster`;
+      el.className = 'shutter-rec ok';
+    } else {
+      el.textContent = 'Post-shutter delay is very short — increase it or use Bulb mode';
+      el.className = 'shutter-rec warn';
+    }
   }
+}
+
+function setCaptureMode(mode) {
+  captureMode = mode;
+  document.querySelectorAll('.capture-mode-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode)
+  );
+  document.querySelectorAll('.segregated-only').forEach(el => { el.hidden = mode !== 'segregated'; });
+  document.querySelectorAll('.combined-only').forEach(el => { el.hidden = mode !== 'combined'; });
+  updateShutterRec();
 }
 
 function updateVoltage(mv) {
@@ -579,6 +650,7 @@ document.querySelectorAll('.seq-btn').forEach(btn => {
     document.querySelectorAll('.seq-btn').forEach(b =>
       b.className = b === this ? 'btn primary seq-btn' : 'btn seq-btn'
     );
+    updateShutterRec();
   });
 });
 
@@ -587,6 +659,11 @@ $('btn-run-seq').addEventListener('click', runSequence);
 $('btn-stop-seq').addEventListener('click', () => { seqAbort = true; });
 $('btn-test-shutter').addEventListener('click', sendShutter);
 $('timing-delay').addEventListener('input', updateShutterRec);
+$('timing-flash').addEventListener('input', updateShutterRec);
+$('timing-settle').addEventListener('input', updateShutterRec);
+document.querySelectorAll('.capture-mode-btn').forEach(btn =>
+  btn.addEventListener('click', () => setCaptureMode(btn.dataset.mode))
+);
 
 // Session
 $('btn-open-session').addEventListener('click', openSession);
