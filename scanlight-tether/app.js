@@ -47,11 +47,6 @@ let captureMode = 'segregated'; // 'segregated' | 'combined'
 let seqRunning  = false;
 let seqAbort    = false;
 
-let sessionDirHandle = null;
-let sessionFiles     = new Map(); // name → lastModified
-let sessionNewCount  = 0;
-let sessionPollTimer = null;
-
 let presets = JSON.parse(localStorage.getItem('scanlightPresets') || '[]');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -290,11 +285,9 @@ async function runCombinedSequence() {
     await sleep(flashMs);
   }
 
-  // Lights off — shutter closes when pulse expires
+  // Lights off — stay off after a combined exposure (single image, nothing to restore)
   await sendPacket(PKT_H2D_SET_COLOR, [0, 0, 0, 0, 0, 0]);
   $('seq-status-text').textContent = seqAbort ? 'Stopped' : 'Exposure complete ✓';
-
-  await sendColor(); // restore user's settings
   seqEnd(steps, seqAbort);
 }
 
@@ -335,154 +328,6 @@ function renderPresets() {
   `).join('');
 }
 
-// ── Capture One session ───────────────────────────────────────────────────────
-const IMAGE_EXT   = /\.(cr3|cr2|raw|raf|nef|arw|dng|tif|tiff|jpg|jpeg)$/i;
-const PREVIEW_EXT = /\.(jpg|jpeg)$/i;
-
-async function openSession() {
-  if (!('showDirectoryPicker' in window)) {
-    alert('File System Access API not supported. Please use Chrome or Edge.');
-    return;
-  }
-  try {
-    let handle = await window.showDirectoryPicker({ mode: 'read' });
-    // Auto-detect Capture One session structure — prefer the Captures subfolder
-    try {
-      const captures = await handle.getDirectoryHandle('Captures', { create: false });
-      handle = captures;
-    } catch { /* not a .cosession root, use as-is */ }
-
-    sessionDirHandle = handle;
-    sessionFiles.clear();
-    sessionNewCount = 0;
-
-    $('session-path-display').textContent = '📁 ' + handle.name;
-    $('session-info').hidden       = false;
-    $('session-help').hidden       = true;
-    $('btn-close-session').disabled   = false;
-    $('btn-refresh-session').disabled = false;
-    $('session-dot').className = 'status-dot connected';
-    $('session-status').textContent = `Session: ${handle.name}`;
-
-    await scanSession();
-    if ($('chk-autopoll').checked) startPolling();
-  } catch (err) {
-    if (err.name !== 'AbortError') console.error('Session open error:', err);
-  }
-}
-
-function closeSession() {
-  stopPolling();
-  sessionDirHandle = null;
-  sessionFiles.clear();
-  sessionNewCount = 0;
-  $('session-info').hidden       = true;
-  $('session-help').hidden       = false;
-  $('btn-close-session').disabled   = true;
-  $('btn-refresh-session').disabled = true;
-  $('session-dot').className = 'status-dot';
-  $('session-status').textContent = 'Session: Not Open';
-  $('thumbnail-grid').innerHTML = '<div class="empty-message">No session open — connect to a Capture One session to view incoming photos.</div>';
-}
-
-async function scanSession() {
-  if (!sessionDirHandle) return;
-
-  const prevFiles = new Map(sessionFiles);
-  const newScan   = new Map();
-  const previews  = [];
-  const rawOnly   = [];
-
-  try {
-    for await (const [name, handle] of sessionDirHandle.entries()) {
-      if (handle.kind !== 'file' || !IMAGE_EXT.test(name)) continue;
-      const file = await handle.getFile();
-      newScan.set(name, file.lastModified);
-      if (PREVIEW_EXT.test(name)) previews.push({ name, file, isNew: !prevFiles.has(name) });
-      else rawOnly.push({ name, isNew: !prevFiles.has(name) });
-    }
-  } catch (e) {
-    console.warn('Scan error:', e);
-    return;
-  }
-
-  const added = [...newScan.keys()].filter(n => !prevFiles.has(n)).length;
-  sessionNewCount += added;
-  sessionFiles = newScan;
-
-  const total = newScan.size;
-  const jpg   = previews.length;
-  const raw   = rawOnly.length;
-
-  $('stat-total').textContent = total;
-  $('stat-new').textContent   = sessionNewCount;
-  $('stat-raw').textContent   = raw;
-  $('stat-jpg').textContent   = jpg;
-
-  previews.sort((a, b) => b.file.lastModified - a.file.lastModified);
-  if (previews.length) {
-    const { name, file } = previews[0];
-    $('latest-capture').textContent =
-      `Latest: ${name} — ${new Date(file.lastModified).toLocaleTimeString()}`;
-  } else if (rawOnly.length) {
-    $('latest-capture').textContent = `Latest: ${rawOnly[0].name} (RAW — no preview)`;
-  }
-
-  renderThumbnails(previews.slice(0, 24), rawOnly);
-}
-
-function renderThumbnails(previews, rawOnly) {
-  const grid = $('thumbnail-grid');
-  grid.innerHTML = '';
-
-  if (!previews.length && !rawOnly.length) {
-    grid.innerHTML = '<div class="empty-message">No image files found. Shoot a photo — it will appear here when Capture One imports it.</div>';
-    return;
-  }
-
-  for (const { name, file, isNew } of previews) {
-    const url = URL.createObjectURL(file);
-    const div = document.createElement('div');
-    div.className = 'thumbnail' + (isNew ? ' new' : '');
-    const img = document.createElement('img');
-    img.src = url;
-    img.loading = 'lazy';
-    img.onload = () => URL.revokeObjectURL(url);
-    const label = document.createElement('div');
-    label.className = 'thumbnail-name';
-    label.textContent = name;
-    div.appendChild(img);
-    div.appendChild(label);
-    grid.appendChild(div);
-  }
-
-  // Show RAW-only cards if no JPEG previews exist
-  if (!previews.length) {
-    for (const { name, isNew } of rawOnly.slice(0, 12)) {
-      const div = document.createElement('div');
-      div.className = 'thumbnail' + (isNew ? ' new' : '');
-      div.innerHTML = `<div class="thumbnail-raw"><div class="thumbnail-raw-icon">📷</div><div class="thumbnail-raw-name">${name}</div></div>`;
-      grid.appendChild(div);
-    }
-    if (rawOnly.length > 12) {
-      const more = document.createElement('div');
-      more.className = 'empty-message';
-      more.style.gridColumn = '1/-1';
-      more.textContent = `+${rawOnly.length - 12} more RAW files`;
-      grid.appendChild(more);
-    }
-  }
-}
-
-function startPolling() {
-  stopPolling();
-  sessionPollTimer = setInterval(() => scanSession(), 3000);
-}
-
-function stopPolling() {
-  if (sessionPollTimer) { clearInterval(sessionPollTimer); sessionPollTimer = null; }
-}
-
 // ── UI sync ───────────────────────────────────────────────────────────────────
 function syncSliders() {
   ['r','g','b','w','ir'].forEach((id, i) => {
@@ -505,6 +350,7 @@ function syncToggleBtns() {
 }
 
 let powerWarnDismissed = false;
+const voltageHistory = []; // rolling buffer to ignore momentary dips
 
 const SHUTTER_SPEEDS_MS  = [4000, 2000, 1000, 500, 250, 125, 60, 30, 15, 8, 4, 2];
 const SHUTTER_SPEED_LBLS = ['4"', '2"', '1"', '1/2', '1/4', '1/8', '1/15', '1/30', '1/60', '1/125', '1/250', '1/500'];
@@ -543,22 +389,30 @@ function setCaptureMode(mode) {
 }
 
 function updateVoltage(mv) {
+  // Rolling average over last 8 readings (~1.6s at 200ms interval) to ignore momentary dips
+  voltageHistory.push(mv);
+  if (voltageHistory.length > 8) voltageHistory.shift();
+  const avg = voltageHistory.reduce((a, b) => a + b, 0) / voltageHistory.length;
+
   const label = $('voltage-display');
-  const v = (mv / 1000).toFixed(2) + 'V';
-  label.textContent = v;
+  label.textContent = (avg / 1000).toFixed(2) + 'V';
   label.className = 'info-card-value ' +
-    (mv >= USB_VBUS_9V ? 'ok' : mv >= USB_VBUS_5V ? 'warn' : 'err');
+    (avg >= USB_VBUS_9V ? 'ok' : avg >= USB_VBUS_5V ? 'warn' : 'err');
+
+  // Only warn once we have a full buffer of sustained low readings
   const alertEl = $('alert-power');
-  if (mv < USB_VBUS_9V && !powerWarnDismissed) {
-    alertEl.innerHTML = `Detected ${v} — full brightness requires 9V / 2A via USB-C PD. ` +
+  if (voltageHistory.length >= 8 && avg < USB_VBUS_9V && !powerWarnDismissed) {
+    const v = (avg / 1000).toFixed(2) + 'V';
+    alertEl.innerHTML = `Sustained ${v} — full brightness requires 9V / 2A via USB-C PD. ` +
       `If your supply is 9V, try a shorter or higher-quality cable. ` +
       `<button onclick="powerWarnDismissed=true;this.closest('.alert').hidden=true" ` +
       `style="margin-left:8px;background:transparent;border:1px solid currentColor;` +
       `color:inherit;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:11px">Dismiss</button>`;
     alertEl.hidden = false;
-  } else if (mv >= USB_VBUS_9V) {
+  } else if (avg >= USB_VBUS_9V) {
     alertEl.hidden = true;
     powerWarnDismissed = false;
+    voltageHistory.length = 0; // reset so it can warn again if supply degrades
   }
 }
 
@@ -665,13 +519,6 @@ document.querySelectorAll('.capture-mode-btn').forEach(btn =>
   btn.addEventListener('click', () => setCaptureMode(btn.dataset.mode))
 );
 
-// Session
-$('btn-open-session').addEventListener('click', openSession);
-$('btn-close-session').addEventListener('click', closeSession);
-$('btn-refresh-session').addEventListener('click', () => { sessionNewCount = 0; scanSession(); });
-$('chk-autopoll').addEventListener('change', function () {
-  if (this.checked && sessionDirHandle) startPolling(); else stopPolling();
-});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 if (!('serial' in navigator)) {

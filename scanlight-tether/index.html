@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Scanlight Tether — Big Light + Capture One</title>
+<title>Scanlight Tether — Big Light Controller</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -11,14 +11,11 @@
 <header class="header">
   <div>
     <div class="header-title">SCANLIGHT TETHER</div>
-    <div class="header-subtitle">Big Scanlight Controller + Capture One Integration</div>
+    <div class="header-subtitle">Big Scanlight Controller — Canon EOS R</div>
   </div>
   <div class="status-badge">
     <span class="status-dot" id="light-dot"></span>
     <span id="light-status">Light: Disconnected</span>
-    <span class="status-divider"></span>
-    <span class="status-dot" id="session-dot"></span>
-    <span id="session-status">Session: Not Open</span>
   </div>
 </header>
 
@@ -226,52 +223,6 @@
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-title">Capture One Session</div>
-      <div class="row">
-        <button class="btn primary" id="btn-open-session">Open Session Folder</button>
-        <button class="btn danger" id="btn-close-session" disabled>Close</button>
-        <button class="btn" id="btn-refresh-session" disabled>↻ Refresh</button>
-        <label class="inline-check">
-          <input type="checkbox" id="chk-autopoll" checked> Auto-poll
-        </label>
-      </div>
-      <div id="session-info" hidden>
-        <div class="folder-path" id="session-path-display"></div>
-        <div class="session-stats mt8">
-          <div class="stat-item">
-            <div class="stat-value" id="stat-total">0</div>
-            <div class="stat-label">Total</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value new" id="stat-new">0</div>
-            <div class="stat-label">New</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value" id="stat-raw">0</div>
-            <div class="stat-label">RAW</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value" id="stat-jpg">0</div>
-            <div class="stat-label">JPEG</div>
-          </div>
-        </div>
-        <div class="latest-info" id="latest-capture"></div>
-      </div>
-      <div class="alert info mt8 small" id="session-help">
-        Tip: in Capture One, right-click your session → "Show Session Folder in Finder". Select the session's <code>Captures/</code> subfolder (or the session root — this app auto-detects the Captures folder).
-      </div>
-    </div>
-
-    <div class="section thumbnails-section">
-      <div class="row-between">
-        <div class="section-title no-border">Recent Captures</div>
-        <span class="small-label">JPEG preview • RAW files transferred but not previewable</span>
-      </div>
-      <div class="thumbnail-grid" id="thumbnail-grid">
-        <div class="empty-message">No session open — connect to a Capture One session to view incoming photos.</div>
-      </div>
-    </div>
 
   </section>
 
