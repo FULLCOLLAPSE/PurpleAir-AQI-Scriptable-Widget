@@ -81,6 +81,9 @@ async function disconnectSerial() {
   connected = false;
   setLightConnected(false);
   // Null out port first so readLoop's outer while loop doesn't grab a new reader
+  voltageCheckDone = false;
+  voltageHistory.length = 0;
+  $('alert-power').hidden = true;
   const r = reader, w = writer, p = port;
   port = reader = writer = null;
   try { if (r) await r.cancel(); } catch {}
@@ -349,8 +352,8 @@ function syncToggleBtns() {
   });
 }
 
-let powerWarnDismissed = false;
-const voltageHistory = []; // rolling buffer to ignore momentary dips
+let voltageCheckDone = false;
+const voltageHistory = [];
 
 const SHUTTER_SPEEDS_MS  = [4000, 2000, 1000, 500, 250, 125, 60, 30, 15, 8, 4, 2];
 const SHUTTER_SPEED_LBLS = ['4"', '2"', '1"', '1/2', '1/4', '1/8', '1/15', '1/30', '1/60', '1/125', '1/250', '1/500'];
@@ -389,30 +392,22 @@ function setCaptureMode(mode) {
 }
 
 function updateVoltage(mv) {
-  // Rolling average over last 8 readings (~1.6s at 200ms interval) to ignore momentary dips
-  voltageHistory.push(mv);
-  if (voltageHistory.length > 8) voltageHistory.shift();
-  const avg = voltageHistory.reduce((a, b) => a + b, 0) / voltageHistory.length;
-
   const label = $('voltage-display');
-  label.textContent = (avg / 1000).toFixed(2) + 'V';
+  label.textContent = (mv / 1000).toFixed(2) + 'V';
   label.className = 'info-card-value ' +
-    (avg >= USB_VBUS_9V ? 'ok' : avg >= USB_VBUS_5V ? 'warn' : 'err');
+    (mv >= USB_VBUS_9V ? 'ok' : mv >= USB_VBUS_5V ? 'warn' : 'err');
 
-  // Only warn once we have a full buffer of sustained low readings
-  const alertEl = $('alert-power');
-  if (voltageHistory.length >= 8 && avg < USB_VBUS_9V && !powerWarnDismissed) {
+  // Check power once at connect time using the first 3 readings, then never again
+  if (voltageCheckDone) return;
+  voltageHistory.push(mv);
+  if (voltageHistory.length < 3) return;
+  voltageCheckDone = true;
+
+  const avg = voltageHistory.reduce((a, b) => a + b, 0) / voltageHistory.length;
+  if (avg < USB_VBUS_9V) {
     const v = (avg / 1000).toFixed(2) + 'V';
-    alertEl.innerHTML = `Sustained ${v} — full brightness requires 9V / 2A via USB-C PD. ` +
-      `If your supply is 9V, try a shorter or higher-quality cable. ` +
-      `<button onclick="powerWarnDismissed=true;this.closest('.alert').hidden=true" ` +
-      `style="margin-left:8px;background:transparent;border:1px solid currentColor;` +
-      `color:inherit;border-radius:3px;padding:1px 6px;cursor:pointer;font-size:11px">Dismiss</button>`;
-    alertEl.hidden = false;
-  } else if (avg >= USB_VBUS_9V) {
-    alertEl.hidden = true;
-    powerWarnDismissed = false;
-    voltageHistory.length = 0; // reset so it can warn again if supply degrades
+    $('alert-power').innerHTML = `Power supply reads ${v} at connect time — full brightness requires 9V / 2A USB-C PD.`;
+    $('alert-power').hidden = false;
   }
 }
 
